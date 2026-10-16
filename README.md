@@ -6,6 +6,10 @@ It wires a small orders function (AWS Lambda and Amazon DynamoDB) as the example
 
 ![Architecture: the Lambda app writes JSON logs, EMF metrics and X-Ray traces; alarms notify SNS email; one dashboard](diagrams/architecture.png)
 
+## Architecture
+
+![Lambda sends logs, metrics and traces; alarms email through SNS](docs/architecture.png)
+
 ## What the construct sets up
 
 | Piece | Setting | Why |
