@@ -6,7 +6,7 @@ All prices are us-east-1, taken from the AWS Price List API on 2026-10-15 (offer
 
 | Item | Free | After that |
 |---|---|---|
-| Custom metrics (each name and dimension-value combination) | 10 | $0.30 per metric for the first 10,000 |
+| Custom metrics (each name and dimension-value combination) | 10 | $0.30 per metric-month for the first 10,000, prorated by the hour |
 | Alarm metrics, standard resolution | 10 | $0.10 per alarm metric |
 | Composite alarms | none | $0.50 each |
 | Log ingestion, Standard class | 5 GB | $0.50 per GB |
@@ -50,12 +50,12 @@ Three free allowances run out in this order:
 2. **Lambda requests, at 1 million.** After that, $0.20 per million on arm64.
 3. **Log ingestion, at about 3.6 million requests.** Setting the system log level to WARN drops the start and successful report lines and pushes this to about 6.5 million.
 
-Metrics, alarms and the dashboard don't grow with traffic. They stay at $0 as long as the catalog and the alarm list stay inside the budget, and synth enforces that.
+Metrics, alarms and the dashboard don't grow with traffic. They stay at $0 as long as the catalog and the alarm list stay inside the budget, and synth enforces that. The one exception is the opt-in composite alarm: it costs $0.50 a month and synth lets it through.
 
 ## Things that bill without warning
 
 - **A log group without retention.** CloudWatch keeps logs forever by default. Storage is cheap per GB, but it only grows.
-- **A per-request dimension.** Each unique dimension value is a new metric. A `requestId` dimension at 1 million requests a month is about $64,497 a month in metrics, using the tiered prices.
+- **A per-request dimension.** Each unique dimension value is a new metric. CloudWatch prorates custom metrics by the hour and bills only the hours a metric gets data, so a `requestId` metric sent once costs 1/730 of a metric-month. At 1 million requests a month that's about 1,370 metric-months, or about $408 a month in metrics (`npm run estimate -- --customMetricSeries=1000000 --customMetricHoursPerMonth=1`). That is still far outside the free 10.
 - **Composite alarms.** They're $0.50 each from the first one.
 - **A metric-math alarm.** It bills one alarm metric for each metric it lists. An error-rate alarm over Errors and Invocations uses two of your ten.
 - **Anomaly detection alarms.** Each one bills three alarm metrics: the metric and the two band edges.
