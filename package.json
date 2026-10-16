@@ -1,0 +1,47 @@
+{
+  "name": "free-tier-observability",
+  "version": "1.0.0",
+  "description": "A CDK construct that gives a Lambda app logs, metrics, alarms, a dashboard and traces inside the CloudWatch always-free tier.",
+  "private": true,
+  "license": "MIT-0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "bundle": "ts-node scripts/bundle.ts",
+    "test": "npm run bundle && jest",
+    "test:int": "npm run bundle && jest -c jest.integration.config.js",
+    "synth": "cdk synth --quiet",
+    "check": "npm run build && npm run lint && npm test && npm run synth",
+    "estimate": "ts-node scripts/estimate.ts",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "smoke": "ts-node scripts/smoke-test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1152.0",
+    "@aws-sdk/lib-dynamodb": "^3.1152.0",
+    "aws-cdk-lib": "^2.273.0",
+    "cdk-nag": "^3.0.2",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cloudformation": "^3.1152.0",
+    "@aws-sdk/client-cloudwatch": "^3.1152.0",
+    "@aws-sdk/client-lambda": "^3.1152.0",
+    "@eslint/js": "^10.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.19.2",
+    "aws-cdk": "^2.1145.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.15",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.2"
+  }
+}
