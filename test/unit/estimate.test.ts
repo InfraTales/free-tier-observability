@@ -1,4 +1,4 @@
-import { estimate, type EstimateInput, FREE, ORDERS_APP, requestsUntilLogsBill, SECONDS_PER_MONTH, xrayTracesUpperBound } from '../../app/src/estimate';
+import { customMetricCost, estimate, type EstimateInput, FREE, HOURS_PER_MONTH, ORDERS_APP, requestsUntilLogsBill, SECONDS_PER_MONTH, xrayTracesUpperBound } from '../../app/src/estimate';
 
 const base: EstimateInput = { ...ORDERS_APP, tracing: false };
 
@@ -43,11 +43,54 @@ test('an 11th alarm metric costs $0.10 and a composite alarm $0.50', () => {
   expect(e.total).toBe(0.6);
 });
 
-test('a requestId dimension turns every request into a billed metric', () => {
-  const e = estimate({ ...base, customMetricSeries: 1_000_000 });
-  // Tiers: 10,000 at $0.30, 240,000 at $0.10, 750,000 at $0.05, less the 10 free.
-  expect(e.lines.find((l) => l.item === 'Custom metrics')!.cost).toBe(64_497);
+// Price List API, AmazonCloudWatch us-east-1, CW:MetricMonitorUsage: $0.30 per metric-month for the
+// first 10,000, $0.10 for the next 240,000, $0.05 for the next 750,000, $0.02 after. 10 are free.
+// The pricing page: custom metrics are "prorated by the hour", billed only in hours they get data.
+const tieredByHand = (metricMonths: number) =>
+  0.3 * Math.min(metricMonths, 10_000) +
+  0.1 * Math.max(0, Math.min(metricMonths, 250_000) - 10_000) +
+  0.05 * Math.max(0, Math.min(metricMonths, 1_000_000) - 250_000) +
+  0.02 * Math.max(0, metricMonths - 1_000_000);
+const byHand = (metricMonths: number) => Math.round((tieredByHand(metricMonths) - tieredByHand(Math.min(metricMonths, 10))) * 100) / 100;
+const metricCost = (e: ReturnType<typeof estimate>) => e.lines.find((l) => l.item === 'Custom metrics')!.cost;
+
+test('metrics sent all month bill the full tiered price', () => {
+  expect(HOURS_PER_MONTH).toBe(730);
+  expect(metricCost(estimate({ ...base, customMetricSeries: 11 }))).toBe(0.3);
   expect(estimate({ ...base, customMetricSeries: 11 }).total).toBe(0.3);
+  for (const n of [6, 10, 11, 10_000, 250_000, 1_000_000, 2_000_000]) {
+    expect(metricCost(estimate({ ...base, customMetricSeries: n }))).toBeCloseTo(byHand(n), 2);
+    expect(customMetricCost(n)).toBeCloseTo(byHand(n), 2);
+  }
+  // 1 million always-on metrics: 9,990 x $0.30 + 240,000 x $0.10 + 750,000 x $0.05.
+  expect(customMetricCost(1_000_000)).toBeCloseTo(9_990 * 0.3 + 240_000 * 0.1 + 750_000 * 0.05, 6);
+});
+
+test('a requestId dimension makes a million one-off metrics, each billed for the 1 hour it gets data', () => {
+  const e = estimate({ ...base, customMetricSeries: 1_000_000, customMetricHoursPerMonth: 1 });
+  const line = e.lines.find((l) => l.item === 'Custom metrics')!;
+  expect(line.usage).toBeCloseTo(1_000_000 / 730, 6); // about 1,370 metric-months
+  expect(line.unit).toBe('metric-months');
+  // All inside the first tier: (1,000,000 / 730 - 10) x $0.30, about $408.
+  expect(line.cost).toBeCloseTo((1_000_000 / 730 - 10) * 0.3, 2);
+  expect(line.cost).toBe(byHand(1_000_000 / 730));
+  expect(line.cost).toBeGreaterThan(400);
+  expect(line.cost).toBeLessThan(420);
+});
+
+test('one-off metrics are not billed for a full month each', () => {
+  // Billing every metric for 730 hours would charge $64,497 here; proration charges about $408.
+  const fullMonth = byHand(1_000_000);
+  expect(fullMonth).toBe(64_497);
+  const prorated = metricCost(estimate({ ...base, customMetricSeries: 1_000_000, customMetricHoursPerMonth: 1 }));
+  expect(prorated).toBeLessThan(fullMonth / 100);
+  // 20 metrics sent for half the month are 10 metric-months, all free; 22 are 11, one billed.
+  expect(customMetricCost(20, 365)).toBe(0);
+  expect(customMetricCost(22, 365)).toBeCloseTo(0.3, 6);
+});
+
+test('rejects more custom metric hours than a month has', () => {
+  expect(() => estimate({ ...base, customMetricHoursPerMonth: 731 })).toThrow(/at most 730/);
 });
 
 test('a fourth dashboard costs $3', () => {
@@ -95,5 +138,10 @@ describe('estimate CLI', () => {
     expect(out).toMatch(/\| Log ingestion \| 1\.370 GB \| 5 \| \$0\.00 \|/);
     expect(out).toMatch(/passes the free 5 GB at 3,649,635 requests/);
     expect(out).toMatch(/inside the always-free tier/);
+  });
+
+  test('prints prorated custom metrics for one-off metrics', () => {
+    const out = report(parseArgs(['--customMetricSeries=1_000_000', '--customMetricHoursPerMonth=1']));
+    expect(out).toMatch(/\| Custom metrics \| 1369\.863 metric-months \| 10 \| \$407\.96 \|/);
   });
 });

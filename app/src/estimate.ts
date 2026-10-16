@@ -10,7 +10,11 @@ export const PRICES = {
   logStoragePerGbMonth: 0.03,
   /** CloudWatch stores logs compressed and bills 0.15 GB of storage per GB ingested. */
   storageCompressionRatio: 0.15,
-  /** Custom metrics per month, by tier: [up to this many metrics, price each]. */
+  /**
+   * Custom metrics by tier: [up to this many metric-months, price per metric-month]. CloudWatch
+   * prorates custom metrics by the hour and bills only the hours a metric receives data, so a
+   * metric sent in 1 hour of the month is 1/730 of a metric-month.
+   */
   customMetricTiers: [
     [10_000, 0.3],
     [250_000, 0.1],
@@ -28,6 +32,7 @@ export const PRICES = {
 export const FREE = {
   logIngestGb: 5,
   logStorageGb: 5,
+  /** Metric-months: 10 metrics sent all month, or more metrics sent for fewer hours. */
   customMetrics: 10,
   alarmMetrics: 10,
   dashboards: 3,
@@ -36,6 +41,8 @@ export const FREE = {
   lambdaGbSeconds: 400_000,
 } as const;
 
+/** Hours in an average month (365 x 24 / 12). Custom metric hours divide by this to give metric-months. */
+export const HOURS_PER_MONTH = 730;
 /** 30 days. X-Ray's Lambda reservoir is 1 traced request per second. */
 export const SECONDS_PER_MONTH = 30 * 24 * 3600;
 /** We count a GB as 10^9 bytes. AWS may use 2^30; 10^9 overstates slightly, which is the safe side. */
@@ -53,7 +60,13 @@ export interface EstimateInput {
   emfLineBytes: number;
   retentionDays: number;
   logClass: 'STANDARD' | 'INFREQUENT_ACCESS';
+  /** Unique metric name and dimension-value combinations sent during the month. */
   customMetricSeries: number;
+  /**
+   * Hours in the month each of those metrics receives data. 730 for a metric sent all month.
+   * A per-request dimension makes one-off metrics, each sent in about 1 hour.
+   */
+  customMetricHoursPerMonth: number;
   alarmMetrics: number;
   compositeAlarms: number;
   dashboards: number;
@@ -81,8 +94,17 @@ export interface Estimate {
   overFreeTier: string[];
 }
 
-/** Tiered custom metric price for n metrics, less the 10 free ones. */
-export function customMetricCost(n: number): number {
+/** Metric-months for `series` metrics that each receive data in `hoursEach` hours of the month. */
+export function customMetricMonths(series: number, hoursEach: number = HOURS_PER_MONTH): number {
+  return (series * hoursEach) / HOURS_PER_MONTH;
+}
+
+/**
+ * Tiered custom metric price, less the 10 free metric-months. `hoursEach` defaults to a full
+ * month, so customMetricCost(n) is the price of n metrics sent all month.
+ */
+export function customMetricCost(series: number, hoursEach: number = HOURS_PER_MONTH): number {
+  const n = customMetricMonths(series, hoursEach);
   const tiered = (count: number) => {
     let cost = 0;
     let floor = 0;
@@ -112,6 +134,9 @@ function validate(i: EstimateInput): void {
   for (const [k, v] of Object.entries(i)) {
     if (typeof v === 'number' && (!Number.isFinite(v) || v < 0)) throw new Error(`${k} must be a number >= 0`);
   }
+  if (i.customMetricHoursPerMonth > HOURS_PER_MONTH) {
+    throw new Error(`customMetricHoursPerMonth must be at most ${HOURS_PER_MONTH}, a full month`);
+  }
   if (i.retentionDays < 1) throw new Error('retentionDays must be at least 1; a log group without retention keeps logs forever');
   if (i.logClass === 'INFREQUENT_ACCESS' && i.emfLinesPerRequest > 0) {
     throw new Error('the Infrequent Access log class does not extract EMF metrics; use STANDARD');
@@ -126,12 +151,13 @@ export function estimate(i: EstimateInput): Estimate {
   const logStoredGb = logIngestGb * (i.retentionDays / 30) * PRICES.storageCompressionRatio;
   const ingestPrice = i.logClass === 'STANDARD' ? PRICES.logIngestStandardPerGb : PRICES.logIngestInfrequentPerGb;
   const traces = i.tracing ? xrayTracesUpperBound(i.requestsPerMonth) : 0;
+  const metricMonths = customMetricMonths(i.customMetricSeries, i.customMetricHoursPerMonth);
   const gbSeconds = i.requestsPerMonth * (i.avgDurationMs / 1000) * (i.memoryMb / 1024);
 
   const lines: EstimateLine[] = [
     { item: 'Log ingestion', usage: logIngestGb, unit: 'GB', free: FREE.logIngestGb, cost: over(logIngestGb, FREE.logIngestGb) * ingestPrice },
     { item: 'Log storage', usage: logStoredGb, unit: 'GB-month', free: FREE.logStorageGb, cost: over(logStoredGb, FREE.logStorageGb) * PRICES.logStoragePerGbMonth },
-    { item: 'Custom metrics', usage: i.customMetricSeries, unit: 'metrics', free: FREE.customMetrics, cost: customMetricCost(i.customMetricSeries) },
+    { item: 'Custom metrics', usage: metricMonths, unit: 'metric-months', free: FREE.customMetrics, cost: customMetricCost(i.customMetricSeries, i.customMetricHoursPerMonth) },
     { item: 'Alarm metrics', usage: i.alarmMetrics, unit: 'alarm metrics', free: FREE.alarmMetrics, cost: over(i.alarmMetrics, FREE.alarmMetrics) * PRICES.alarmMetricPerMonth },
     { item: 'Composite alarms', usage: i.compositeAlarms, unit: 'alarms', free: 0, cost: i.compositeAlarms * PRICES.compositeAlarmPerMonth },
     { item: 'Dashboards', usage: i.dashboards, unit: 'dashboards', free: FREE.dashboards, cost: over(i.dashboards, FREE.dashboards) * PRICES.dashboardPerMonth },
@@ -175,6 +201,7 @@ export const ORDERS_APP: EstimateInput = {
   retentionDays: 14,
   logClass: 'STANDARD',
   customMetricSeries: 6,
+  customMetricHoursPerMonth: HOURS_PER_MONTH,
   alarmMetrics: 7,
   compositeAlarms: 0,
   dashboards: 1,

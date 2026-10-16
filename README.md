@@ -1,6 +1,6 @@
 # Observability for a Lambda app inside the CloudWatch free tier
 
-CloudWatch's always-free tier gives you 10 custom metrics, 10 alarm metrics, 5 GB of log ingestion, 5 GB of log storage and 3 dashboards a month. X-Ray adds 100,000 recorded traces. This repo is an AWS CDK construct, `FreeTierObservability`, that spends that budget on purpose and fails `cdk synth` when a change would go over it.
+CloudWatch's always-free tier gives you 10 custom metrics, 10 alarm metrics, 5 GB of log ingestion, 5 GB of log storage and 3 dashboards a month. X-Ray adds 100,000 recorded traces. This repo is an AWS CDK construct, `FreeTierObservability`, that spends that budget on purpose. `cdk synth` fails when the custom metrics, alarms or dashboard would go over their free allowance. Logs, X-Ray and Lambda grow with traffic, so synth can't check them; `npm run estimate` does. The optional composite alarm costs $0.50 a month and still passes synth.
 
 It wires a small orders function (AWS Lambda and Amazon DynamoDB) as the example, but the construct works for any Lambda function.
 
@@ -37,6 +37,7 @@ It wires a small orders function (AWS Lambda and Amazon DynamoDB) as the example
 ```bash
 npm run estimate
 npm run estimate -- --requestsPerMonth=5000000 --systemBytesPerRequest=0 --tracing=false
+npm run estimate -- --customMetricSeries=1000000 --customMetricHoursPerMonth=1
 ```
 
 The defaults describe this app: about 1,370 log bytes per request. At that size, log ingestion passes the free 5 GB at about 3.6 million requests a month. Lambda's own 1 million free requests run out first, and X-Ray tracing can bill above 100,000 requests. [docs/cost.md](docs/cost.md) walks through the numbers.
