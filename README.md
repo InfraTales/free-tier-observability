@@ -4,8 +4,6 @@ CloudWatch's always-free tier gives you 10 custom metrics, 10 alarm metrics, 5 G
 
 It wires a small orders function (AWS Lambda and Amazon DynamoDB) as the example, but the construct works for any Lambda function.
 
-![Architecture: the Lambda app writes JSON logs, EMF metrics and X-Ray traces; alarms notify SNS email; one dashboard](diagrams/architecture.png)
-
 ## Architecture
 
 ![Lambda sends logs, metrics and traces; alarms email through SNS](docs/architecture.png)
@@ -28,6 +26,7 @@ It wires a small orders function (AWS Lambda and Amazon DynamoDB) as the example
 `FreeTierObservability` adds a validation to the stack. `cdk synth` stops with a message when any of these is true:
 
 - more than 10 alarm metrics, counted the way CloudWatch bills them (a math expression over 3 metrics counts as 3)
+- an alarm the free tier doesn't cover: a period under 60 seconds (high resolution), or a Metrics Insights query (`SELECT ...`), which bills per metric it analyzes
 - more than 10 custom metric series in the catalog
 - a catalog dimension named like a per-request value (`requestId`, `orderId`, `userId` and similar), or with more than 5 values
 - an application log level of WARN or higher while the app publishes EMF metrics, because Lambda treats an EMF line with no `level` as INFO and drops it
