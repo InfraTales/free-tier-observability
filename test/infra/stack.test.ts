@@ -7,7 +7,7 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { AwsSolutionsChecks } from 'cdk-nag';
 import { HIGH_CARDINALITY_NAMES, METRICS, NAMESPACE } from '../../app/src/metric-catalog';
-import { FREE_ALARM_METRICS, FREE_CUSTOM_METRICS, METRICS_PER_FREE_DASHBOARD } from '../../infra/lib/free-tier-observability';
+import { FREE_ALARM_METRICS, FREE_CUSTOM_METRICS, METRICS_PER_FREE_DASHBOARD, paidAlarmReason } from '../../infra/lib/free-tier-observability';
 import { OrdersStack, type OrdersStackProps } from '../../infra/lib/orders-stack';
 
 const env = { account: '123456789012', region: 'us-east-1' };
@@ -221,6 +221,43 @@ describe('guards that fail synth', () => {
     });
     expect(s.obs.alarmMetricsUsed).toBe(11);
     expect(() => app.synth()).toThrow(/11 alarm metrics; the free tier covers 10/);
+  });
+
+  test('a Metrics Insights alarm fails synth: it bills per metric analyzed, which synth can\'t count', () => {
+    const app = new cdk.App();
+    const s = new OrdersStack(app, 'Insights', { env });
+    s.obs.addAlarm('AllErrors', {
+      metric: new cloudwatch.MathExpression({
+        expression: 'SELECT SUM(Errors) FROM SCHEMA("AWS/Lambda", FunctionName)',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      description: 'errors across every function',
+    });
+    // The old count saw no metrics in the query and called it free.
+    expect(s.obs.alarmMetricsUsed).toBe(7);
+    expect(() => app.synth()).toThrow(/alarm AllErrors uses a Metrics Insights query/);
+  });
+
+  test.each([10, 30])('a %i-second alarm fails synth: high-resolution alarms are not in the free tier', (seconds) => {
+    const app = new cdk.App();
+    const s = new OrdersStack(app, `HighRes${seconds}`, { env });
+    s.obs.addAlarm('FastErrors', {
+      metric: s.obs.customMetric('Orders', { Service: 'orders', Outcome: 'rejected' }, 'Sum', cdk.Duration.seconds(seconds)),
+      threshold: 1,
+      description: 'rejected orders, fast',
+    });
+    expect(() => app.synth()).toThrow(new RegExp(`alarm FastErrors has a ${seconds}-second period, so it's a high-resolution alarm`));
+  });
+
+  test('a math expression is high-resolution when its period is under 60 seconds; CDK applies that period to its metrics', () => {
+    const fast = new cloudwatch.Metric({ namespace: 'N', metricName: 'M', period: cdk.Duration.seconds(10) });
+    const slow = new cloudwatch.Metric({ namespace: 'N', metricName: 'M', period: cdk.Duration.minutes(1) });
+    expect(paidAlarmReason(new cloudwatch.MathExpression({ expression: 'a', usingMetrics: { a: slow }, period: cdk.Duration.seconds(30) }))).toMatch(/30-second/);
+    expect(paidAlarmReason(new cloudwatch.MathExpression({ expression: 'a + b', usingMetrics: { a: slow, b: fast }, period: cdk.Duration.minutes(1) }))).toBeUndefined();
+    expect(paidAlarmReason(fast)).toMatch(/10-second period/);
+    expect(paidAlarmReason(new cloudwatch.MathExpression({ expression: 'a', usingMetrics: { a: slow } }))).toBeUndefined();
+    expect(paidAlarmReason(slow)).toBeUndefined();
   });
 
   test('a metric outside the catalog is refused', () => {

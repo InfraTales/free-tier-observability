@@ -5,7 +5,8 @@
  * - Every function gets its own log group with a retention period, JSON logs and log levels.
  * - Custom metrics come from a catalog that lists every dimension value, so the metric count
  *   is known at synth time.
- * - Alarms are counted by alarm metric, the unit CloudWatch bills. Synth fails over budget.
+ * - Alarms are counted by alarm metric, the unit CloudWatch bills. Synth fails over budget,
+ *   and on high-resolution or Metrics Insights alarms, which the free tier doesn't cover.
  */
 import { ArnFormat, Duration, RemovalPolicy, Stack, Validations } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -65,6 +66,26 @@ export function alarmMetricCount(metric: cloudwatch.IMetric): number {
     return Object.values(metric.usingMetrics).reduce((n, m) => n + alarmMetricCount(m), 0);
   }
   return 1;
+}
+
+/**
+ * Why an alarm on this metric falls outside the free tier, or undefined if it doesn't. The free
+ * alarm metrics only cover standard-resolution alarms that list their metrics directly.
+ * - A Metrics Insights query (SELECT ...) bills per metric it analyzes, which synth can't count.
+ * - A period under 60 seconds makes it a high-resolution alarm, billed at a higher rate.
+ */
+export function paidAlarmReason(metric: cloudwatch.IMetric): string | undefined {
+  const config = metric.toMetricConfig();
+  if (config.mathExpression) {
+    if (/\bSELECT\b/i.test(config.mathExpression.expression)) {
+      return 'uses a Metrics Insights query, which bills per metric analyzed and has no free tier';
+    }
+    // CDK applies the expression's period to every metric in it, so this one number decides.
+    const seconds = config.mathExpression.period;
+    return seconds < 60 ? `has a ${seconds}-second period, so it's a high-resolution alarm` : undefined;
+  }
+  const seconds = config.metricStat?.period.toSeconds() ?? 60;
+  return seconds < 60 ? `has a ${seconds}-second period, so it's a high-resolution alarm` : undefined;
 }
 
 export class FreeTierObservability extends Construct {
@@ -127,6 +148,10 @@ export class FreeTierObservability extends Construct {
   /** Everything that would push this stack past the free tier or break EMF. */
   budgetProblems(): string[] {
     const problems = catalogProblems(this.props.catalog);
+    for (const alarm of this.alarms) {
+      const reason = paidAlarmReason(alarm.metric);
+      if (reason) problems.push(`alarm ${alarm.node.id} ${reason}; the free tier covers standard-resolution alarms only`);
+    }
     if (this.alarmMetricsUsed > FREE_ALARM_METRICS) {
       problems.push(`${this.alarmMetricsUsed} alarm metrics; the free tier covers ${FREE_ALARM_METRICS}`);
     }
